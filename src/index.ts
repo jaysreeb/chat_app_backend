@@ -21,8 +21,6 @@ app.get('/api/me', authenticateToken, (req: AuthRequest, res:Response) => {
     username: req.username,
   });
 });
-
-
 // web socket server created
 const server = createServer(app);
 initWebSocketServer(server);

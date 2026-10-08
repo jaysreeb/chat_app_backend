@@ -10,7 +10,7 @@ interface ConnectedClient {
     username: string;
     socket: WebSocket;
 }
-interface IncomingMessage2 {
+interface IncomingMessage1 {
     type: 'message';
     to: number;
     content: string;
@@ -22,7 +22,7 @@ export function initWebSocketServer(server:Server){
     const wss = new WebSocketServer({server});
 
     wss.on('connection', async(socket: WebSocket, req: IncomingMessage) => {
-        console.log("CONNECTED");
+        // console.log("CONNECTED");
         const url = new URL(req.url!, 'http://${req.headers.host}');
         const token = url.searchParams.get('token');
 
@@ -73,13 +73,13 @@ export function initWebSocketServer(server:Server){
 
         socket.on('message', async(data) =>{
         try{
-            const parsed: IncomingMessage2 = JSON.parse(data.toString());
+            const parsed: IncomingMessage1 = JSON.parse(data.toString());
             
             if(parsed.type === 'message'){
                 await handleMessage(userId, parsed);
             }
         }catch(err){
-            console.error('Message handler error:', err); 
+            // console.error('Message handler error:', err); 
             socket.send(JSON.stringify({type:'error', message:'Invalid message format'}))
         }
         });
@@ -88,11 +88,11 @@ export function initWebSocketServer(server:Server){
             clients.delete(userId);
             console.log(`User ${email} disconnected. Online: ${clients.size}`);
         });
-         console.log('WebSocket server initialized');
+        //  console.log('WebSocket server initialized');
     });
 }
 
-async function handleMessage(senderId: number, msg: IncomingMessage2){
+async function handleMessage(senderId: number, msg: IncomingMessage1){
     const sender = clients.get(senderId);
     const recipient = clients.get(msg.to);
 
