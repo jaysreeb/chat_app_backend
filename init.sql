@@ -1,16 +1,16 @@
-CREATE TABLE IF NOT EXISTS users (
-  id         SERIAL PRIMARY KEY,
-  email      TEXT NOT NULL UNIQUE,
-  username   TEXT NOT NULL UNIQUE,
-  password   TEXT NOT NULL,
+CREATE TABLE users(
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hashed TEXT NOT NULL,
+  username TEXT NOT NULL UNIQUE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-  id          SERIAL PRIMARY KEY,
-  sender_id   INTEGER REFERENCES users(id),
-  receiver_id INTEGER REFERENCES users(id),
-  content     TEXT NOT NULL,
-  delivered   BOOLEAN DEFAULT FALSE,
-  created_at  TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE messages(
+  id SERIAL PRIMARY KEY,
+  sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  receiver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  chat_content TEXT NOT NULL,
+  delivered BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
