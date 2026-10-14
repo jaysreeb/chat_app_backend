@@ -4,11 +4,16 @@ import usersRouter from './routes/users';
 import { AuthRequest, authenticateToken} from './middleware/auth';
 import { createServer } from 'node:http';
 import {initWebSocketServer} from './websocket/server';
+import * as dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
+
+dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT);
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', authenticateToken, usersRouter);

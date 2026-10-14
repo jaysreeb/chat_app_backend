@@ -14,3 +14,12 @@ CREATE TABLE messages(
   delivered BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE refresh_tokens(
+  id SERIAL PRIMARY KEY,
+  userId INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(255) NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+)
