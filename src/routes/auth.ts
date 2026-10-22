@@ -2,7 +2,8 @@ import express, { type Request, type Response } from 'express';
 import bcrypt from "bcrypt";
 import pool from '../db';
 import jwt, { JwtPayload } from 'jsonwebtoken';
-import { error } from 'node:console';
+import crypto from 'crypto';
+
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.post('/register', async(req: Request, res: Response) =>{
       })
 
   }catch (error: any){
-    if(error.code == '23505'){
+    if(error.code === '23505'){
       return res.status(409).json({message:"Duplicate or Empty Email/username"})
     }
     console.error('Registration failed:', error);
@@ -51,13 +52,13 @@ router.post('/login',async(req: Request, res: Response) =>{
     const query = await pool.query(`SELECT id, email, password_hashed FROM users WHERE email = $1`,[email]);
     const user = query.rows[0];
     if(!user){
-      return res.status(401).json({error: "Invalid email or Password"})
+      return res.status(401).json({error: "Invalid email or password"})
     }
 
     const isMatch = await bcrypt.compare(password, user.password_hashed);
     
     if(!isMatch){
-      return res.status(401).json({error:"Invalid email or Password"});
+      return res.status(401).json({error:"Invalid email or password"});
     }
     // JWT
     const payload ={
@@ -79,12 +80,17 @@ router.post('/login',async(req: Request, res: Response) =>{
       expiresIn:'7d'
     });
 
+    const tokenHashed = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    const refreshTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);  
+    // Save hashed token to DB
+    const result = await pool.query(`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, [user.id, tokenHashed, refreshTokenExpiresAt]);
+    console.log('Refresh token row inserted:', result.rowCount);
+
     res.cookie('refreshToken',refreshToken,{
       httpOnly: true,
       secure: process.env.NODE_ENV ==='production',
       sameSite:'strict',
       maxAge: 7*24*60*60*1000,
-      path: '/api/auth/refresh',
     })
 
     return res.status(200).json({
@@ -106,13 +112,14 @@ router.post('/refresh', async(req: Request, res:Response) =>{
   // write refresh endpoint
   const refreshToken = req.cookies.refreshToken;
   const refreshTokenSecret= process.env.JWT_REFRESH_SECRET;
-
+  
   if (!refreshToken){
     return res.status(401).json({error:"Authentication error, Refresh Token missing"})
   }
   if (!refreshTokenSecret){
     return res.status(500).json({error: "Refresh Token secret is not configured"})
   }
+
   // JWT refresh token verify
   try {
     const decoded = jwt.verify(refreshToken, refreshTokenSecret);
@@ -125,6 +132,19 @@ router.post('/refresh', async(req: Request, res:Response) =>{
     if(!jwtSecret){
       return res.status(500).json({error:'JWT Secret inst configured, Internal Server Error'});
     }
+    const tokenHashed = crypto.createHash('sha256').update(refreshToken).digest('hex');
+  // Check for refreshtoken in db
+    const result = await pool.query
+    (`SELECT id, user_id FROM refresh_tokens 
+      WHERE token_hash = $1 
+      AND revoked_at IS NULL 
+      AND expires_at > NOW()`, 
+      [tokenHashed]);
+  
+    if(result.rows.length ===0){
+    return res.status(401).json({error: 'Refresh Token is invalid,expired, or revoked'});
+    }
+
     const payLoad = {userId: decoded.userId}
     const newAccessToken = jwt.sign(payLoad, jwtSecret,{
       expiresIn: '15m'
@@ -137,8 +157,34 @@ router.post('/refresh', async(req: Request, res:Response) =>{
     })
       
   } catch (error) {
-    return res.status(401).json({error: "Invalid or expired refresh token"})    
+    return res.status(500).json({error: "Internal Server Error"})    
   }
+})
+
+router.post('/logout', async(req: Request, res: Response) => {
+  const refreshToken = req.cookies.refreshToken;
+  if(!refreshToken){
+    return res.status(200).json({ message:'Logged out successfully'});
+  }
+  try {
+    const tokenHashed = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    await pool.query(`UPDATE refresh_tokens 
+      SET revoked_at =NOW()
+      WHERE token_hash = $1
+      AND revoked_at IS NULL`,
+      [tokenHashed]);
+
+  } catch (error) {
+    console.error('Logout failed:', error);
+    return res.status(500).json({error: 'Internal Server Error'})    
+  }
+  res.clearCookie('refreshToken',{
+    httpOnly: true,
+    secure: process.env.NODE_ENV ==='production',
+    sameSite: 'strict',
+  });
+
+  return res.status(200).json({message: 'Logged out successfully'});
 })
 
 export default router;

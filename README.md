@@ -1,292 +1,137 @@
-# chat://
+# One-to-One Chat Backend
 
-A real-time chat application built with Node.js, TypeScript, PostgreSQL, and raw WebSockets.
----
+A backend for a one-to-one chat application built with Node.js, TypeScript, Express, PostgreSQL, and WebSockets.
 
-## What it does
+I built this project to practise backend development, especially JWT authentication, persistent messaging, and handling WebSocket connections.
 
-- Register and login with email and password
-- Real-time one-to-one messaging over WebSockets
-- Messages persist to PostgreSQL, offline users receive them on reconnect
-- JWT authentication on both HTTP routes and the WebSocket handshake
-- Rate limiting per user (in progress)
-- Fully containerised with Docker
+## Features
 
----
+-   Register and log in with email and password
+-   Authenticate HTTP routes with JWT access tokens
+-   Refresh sessions using an HttpOnly cookie and stored refresh-token
+    hashes
+-   Connect to the server over WebSockets
+-   Send one-to-one messages and store them in PostgreSQL
+-   Track message delivery status and retrieve undelivered messages
+-   Run the application and PostgreSQL with Docker Compose
 
 ## Tech stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Runtime | Node.js | Non-blocking I/O, ideal for concurrent connections |
-| Language | TypeScript | Type safety, catches bugs at compile time |
-| Framework | Express | Minimal, does not hide what is happening |
-| WebSockets | `ws` library (raw) | To get an understanding of the protocol |
-| Database | PostgreSQL | Relational data, ACID guarantees, strong at indexing |
-| Auth | JWT | Stateless - no DB hit on every request |
-| Passwords | bcrypt | Intentionally slow hashing, resistant to brute force |
-| Containers | Docker + Docker Compose | Same environment locally and in production |
+-   **Node.js and TypeScript** --- server runtime and language
+-   **Express** --- HTTP routes and middleware
+-   **`ws`** --- WebSocket connections
+-   **PostgreSQL and `pg`** --- persistent storage and database queries
+-   **JWT and bcrypt** --- token-based authentication and password
+    hashing
+-   **Docker Compose** --- local application and database setup
+-   **Vitest and Supertest** --- automated API tests
 
----
+## How it works
 
-## Architecture
+The HTTP API and WebSocket server run on the same Node.js HTTP server.
 
-### High-level overview
+-   **HTTP** handles registration, login, token refresh, logout, and
+    user-related requests.
+-   **WebSockets** handle live message communication.
+-   **PostgreSQL** stores users, refresh-token sessions, and messages.
+-   An in-memory `Map` associates connected user IDs with their
+    WebSocket connections.
 
-```
-Client (Browser)
-    │
-    ├── HTTP (REST)  ──►  Express routes  ──►  PostgreSQL
-    │                          │
-    └── WebSocket   ──►  ws server
-                           │
-                    Connection Map (memory)
-                    userId → socket
-```
+The connection map is suitable for the current single-server setup. If
+the app is run across multiple Node.js instances, each instance would
+have its own map; a shared coordination mechanism would be needed for
+cross-instance message delivery.
 
-The server runs two protocols on the same HTTP server instance:
+## Authentication
 
-- **HTTP** handles auth (register, login) and data fetching (message history)
-- **WebSocket** handles real-time delivery
+The authentication routes are mounted under `/api/auth`:
 
-They share the same PostgreSQL connection pool. The WebSocket server does not replace HTTP, it extends it for the parts that need to be live.
+  1. `POST`                  `/api/auth/register`    Create an account
+  2. `POST`                  `/api/auth/login`       Verify credentials and issue tokens
+  3. `POST`                  `/api/auth/refresh`     Issue a new access token using a valid refresh session
+  4. `POST`                  `/api/auth/logout`      Revoke the refresh-token session
+  5. `GET`                   `/api/me`               Return the authenticated user's token claims
+                                                  
 
----
+Protected routes use `authenticateToken` middleware. It verifies the access token and attaches the user ID, email, and username to the request.
 
-### The connection registry
+Passwords are hashed with bcrypt. Refresh tokens are stored as hashes in PostgreSQL so the raw refresh token does not need to be stored in the database.
 
-The Javascript `Map` is used for connections:
+## Messaging
 
-```typescript
-const clients = new Map<number, ConnectedClient>();
-// userId → { socket, email }
-```
+When a message is received over a WebSocket, the server stores it in
+PostgreSQL. The connection map is used to check whether the recipient is
+connected. The database also tracks whether a message has been delivered
+and supports querying undelivered messages.
 
-This keeps a track of who is online right now. Every incoming WebSocket connection is registered here. Every disconnect removes the entry. When a message arrives, the server checks this Map to decide whether to deliver immediately or queue in PostgreSQL.
-
-This is an in-memory structure, it lives inside the Node.js process. It is fast. It is also the architectural boundary: it will break if scaled beyond single server. The solution at scale is Redis pub/sub, where all server instances subscribe to a shared channel.
-
----
-
-### Auth flow
-
-```
-POST /register
-    │
-    ├── Validate input (email format, password length)
-    ├── bcrypt.hash(password, 10)          
-    ├── INSERT INTO users ...              ← UNIQUE constraint on email
-    └── 201 + { id, email, created_at }  
-
-POST /login
-    │
-    ├── SELECT * FROM users WHERE email = $1
-    ├── bcrypt.compare(incoming, stored_hash)
-    ├── jwt.sign({ userId, email }, secret, { expiresIn: '24h' })
-    └── 200 + { token, user }
-```
-
-**Why bcrypt with saltRounds = 10?**  
-Unlike fast algorithms (MD5, SHA-256) which allow attackers to guess billions of passwords per second, **bcrypt** is an adaptive, slow-hashing function. 
-Setting `saltRounds = 10` forces bcrypt to run its internal key-setup loop $2^{10}$ (1,024) times. This adds a tiny ~100ms delay per login for users, but makes brute-force attacks mathematically unfeasible for attackers.
-
-
-**Why JWT instead of sessions?**  
-Sessions store state on the server, every request hits the database to validate the session. JWT is stateless, the token carries the user's identity, signed with a secret. The server just verifies the signature. No database hit. The tradeoff: you cannot invalidate a JWT before it expires, which is why `expiresIn: '24h'` is important.
-
----
-
-### WebSocket flow
-
-```
-Client connects: ws://server?token=eyJhbG...
-    │
-    ├── Server extracts token from query string
-    ├── jwt.verify(token, secret)          ← reject immediately if invalid
-    ├── clients.set(userId, { socket })    ← register in Map
-    ├── Fetch undelivered messages from DB ← flush offline queue
-    │
-    └── Listen for messages
-            │
-            ├── Parse JSON: { type, to, content }
-            ├── saveMessage(senderId, to, content)   ← always persist first
-            │
-            ├── Is recipient in Map?
-            │       YES → socket.send(message)
-            │             markDelivered(messageId)
-            │
-            │       NO  → message stays in DB with delivered = false
-            │             notify sender: "queued"
-            │
-            └── On close: clients.delete(userId)
-```
-
-**Why the token is in the query string, not a header?**  
-The browser's native `WebSocket` API does not allow custom headers like `Authorization` during the WebSocket handshake. Because of this limitation, a common approach is to pass the JWT token as a query parameter during connection establishment.
-Example: ws://localhost:3000?token=JWT_TOKEN
-
-In production systems, this is usually combined with:
-- `wss://` (encrypted WebSocket connections)
-- short-lived tokens
-- session validation or token rotation
-
-since query parameters may appear in logs or monitoring systems.
-
-
-**Why save to DB before delivering?**  
-If the server crashes between delivery and persistence, the message is lost. Saving first guarantees the message exists. This is the same principle as write-ahead logging (WAL) in databases, durability before acknowledgement.
-
----
-
-### Database schema
-
-```sql
-CREATE TABLE users (
-  id         SERIAL PRIMARY KEY,
-  email      TEXT NOT NULL UNIQUE,
-  password   TEXT NOT NULL,          -- bcrypt hash, not plain text
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE messages (
-  id          SERIAL PRIMARY KEY,
-  sender_id   INTEGER REFERENCES users(id),
-  receiver_id INTEGER REFERENCES users(id),
-  content     TEXT NOT NULL,
-  delivered   BOOLEAN DEFAULT FALSE,  -- the offline queue flag
-  created_at  TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-**Why `delivered BOOLEAN`?**  
-This is the offline queue mechanism. When a message arrives for an offline user, it is saved with `delivered = false`. When that user connects, the server runs:
-
-```sql
-SELECT * FROM messages
-WHERE receiver_id = $1 AND delivered = false
-ORDER BY created_at ASC;
-```
-
-Then marks them all delivered. Its simple and reliable, no separate queue table needed.
-
-**Why `TIMESTAMPTZ` instead of `TIMESTAMP`?**  
-`TIMESTAMPTZ` stores in UTC and converts to the client's timezone. `TIMESTAMP` stores whatever you give it with no timezone awareness. A chat app with users in multiple timezones needs `TIMESTAMPTZ`.
-
----
-
-### Docker setup
-
-The app runs as two containers orchestrated by Docker Compose:
-
-```
-docker-compose.yml
-    │
-    ├── app container      (Node.js — built from Dockerfile)
-    │       └── depends_on postgres (waits for healthcheck)
-    │
-    └── postgres container (postgres:16-alpine)
-            ├── init.sql runs on first start → creates tables
-            └── postgres_data volume → persists across restarts
-```
-
-**Why `depends_on` with `service_healthy`?**  
-Without the healthcheck condition, Docker starts the Node.js container the moment the Postgres container starts, but Postgres takes a few seconds to be ready to accept connections. The app would crash trying to connect before Postgres is up. The healthcheck (`pg_isready`) makes Docker wait until Postgres is actually accepting connections.
-
-**Why a named volume for postgres_data?**  
-Without the volume, every `docker compose down` wipes the database. The named volume persists the data between restarts. `docker compose down -v` removes it,This is useful when you want a clean slate during development.
-
-
----
-
-## Scaling considerations
-
-This app works perfectly for a single server. These are the limits and the solutions:
-
-**Problem 1: The connection Map breaks at scale**  
-If you run two Node.js instances behind a load balancer, User A connects to Server 1, User B connects to Server 2. A message from A to B fails because Server 1's Map does not contain B.
-
-**Solution:** Redis pub/sub. Both servers subscribe to a shared Redis channel. Server 1 publishes the message, Server 2 receives it and delivers to B. This is how WhatsApp, Slack, and Discord scale their WebSocket layers.
-
-**Problem 2: JWT cannot be revoked before expiry**  
-If a user's account is compromised, their token is valid for up to 24 hours.
-
-**Solution:** Refresh token pattern. Short-lived access token (15 minutes) + long-lived refresh token stored in an httpOnly cookie. On access token expiry, the client silently fetches a new one using the refresh token.
-
-**Problem 3: No index on messages table**  
-As messages grow, `SELECT ... WHERE receiver_id = $1 AND delivered = false` becomes a full table scan.
-
-**Solution:**
-```sql
-CREATE INDEX idx_messages_receiver_delivered
-ON messages(receiver_id, delivered)
-WHERE delivered = false;
-```
-A partial index on only undelivered messages, its small, fast, directly serves the offline queue query.
-
----
+A few things I still need to test carefully are reconnect behavior, what
+happens if a connection drops during delivery, and how to avoid marking
+a message delivered before the recipient has actually received it.
 
 ## Running locally
 
-```bash
-git clone https://github.com/jaysreeb/chat_app_backend.git
-cd chat_app_backend
-docker compose up --build
+You need Docker and Docker Compose installed.
+
+1.  Create a `.env` file with the environment variables required by the
+    application. Do not commit secrets to Git.
+
+2.  Build and start the services:
+
+    ``` bash
+    docker compose up --build
+    ```
+
+3.  To stop the services:
+
+    ``` bash
+    docker compose down
+    ```
+
+The named PostgreSQL volume preserves database data between container
+restarts. Use `docker compose down -v` only when you intentionally want
+to delete the volume and its data.
+
+## Running tests
+
+Run the test suite once:
+
+``` bash
+npx vitest run
 ```
 
-Open `http://localhost:3000` — register two accounts in two tabs and start chatting.
+Or run Vitest in watch mode:
 
----
+``` bash
+npm test
+```
+
+The current tests use Vitest and Supertest to exercise the Express app.
+Tests that access PostgreSQL need a database configuration reachable
+from the environment where the test process is running.
 
 ## Project structure
 
+``` text
+src/
+  app.ts                  # Express app setup
+  index.ts                # HTTP server and WebSocket startup
+  db.ts                   # PostgreSQL connection pool
+  routes/
+    auth.ts               # Registration, login, refresh, and logout
+    users.ts              # User routes
+  middleware/
+    auth.ts               # JWT verification middleware
+  websocket/
+    server.ts             # WebSocket connections and message handling
+    messageService.ts     # Message database queries
+tests/
+  auth.test.ts            # API tests
+init.sql                  # Database schema
+Dockerfile
+docker-compose.yml
 ```
-chat-app/
-  src/
-    index.ts              — Express server + WebSocket init
-    db.ts                 — PostgreSQL connection pool
-    routes/
-      auth.ts             — /register and /login endpoints
-      users.ts            — /user Profile
-    middleware/
-      auth.ts             — JWT verification middleware
-    websocket/
-      server.ts           — WebSocket server + connection registry
-      messageService.ts   — DB queries for messages
-  init.sql                — Database schema (runs on first container start)
-  Dockerfile
-  docker-compose.yml
-```
 
----
+## What I learned and FEatures to add
 
-## Resources
-
-These are the primary sources used to build this project:
-
-- **WebSockets (protocol)**  https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
-- **ws library** https://github.com/websockets/ws
-- **PostgreSQL** https://www.postgresql.org/docs/current/index.html
-- **JWT** https://jwt.io/introduction
-- **node-postgres (pg)** https://node-postgres.com
-- **Docker Compose** https://docs.docker.com/compose/
-
----
-
-## What I learned building this
-
-Working without Socket.io forced me to understand the WebSocket upgrade handshake, how browsers negotiate protocol switches over HTTP, and why persistent connections are fundamentally different from request-response. The connection registry problem , how does a server know which socket belongs to which user, turned out to be the core design challenge, and solving it in memory first made the scaling limitation obvious: the Map is the bottleneck which Redis can solve.
-
-Writing every SQL query by hand rather than using an ORM made the `delivered = false` index opportunity visible. With an ORM you describe what you want; with raw SQL you see what the database is actually doing.
-
----
-## Next 
-    1. Rate limiter        
-
-## Features to Add
-    2. Heartbeat           
-    3. Message status     
-    4. Structured logging 
-    5. Pagination         
-    6. Unit tests          
-    7. Image support       
-    8. Message sequencing  
+Building the WebSocket layer made me think about how the server associates a connection with a user and what happens when that user disconnects. I also had to work through refresh-token storage and revocation, and I am now adding automated tests around the HTTP routes. 
+The next areas I want to improve are offline-message delivery, test isolation, pagination for message history, structured logging, and rate limiting.

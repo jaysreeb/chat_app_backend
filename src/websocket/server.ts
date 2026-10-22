@@ -22,7 +22,7 @@ export function initWebSocketServer(server:Server){
     const wss = new WebSocketServer({server});
 
     wss.on('connection', async(socket: WebSocket, req: IncomingMessage) => {
-        // console.log("CONNECTED");
+        console.log("CONNECTED");
         const url = new URL(req.url!, 'http://${req.headers.host}');
         const token = url.searchParams.get('token');
 

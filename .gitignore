@@ -5,3 +5,5 @@ dist
 READMESAMPLE.md
 QUESTIONS_ANS.md
 SQL.md
+# Vitest reports and artifacts
+.vitest/

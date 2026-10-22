@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 const pool = new Pool({
-  host: 'postgres',
+  host: process.env.DB_HOST,
   user: 'postgres',
   password: 'postgres',
   database: 'chatapp',
