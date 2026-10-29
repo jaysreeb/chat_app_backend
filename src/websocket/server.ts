@@ -4,18 +4,19 @@ import { Server } from 'http';
 import jwt from 'jsonwebtoken';
 import { markDelivered, saveMessage, getUndeliveredMessages} from './messageService';
 
+// --- TYPE DEFINITIONS ---
 interface ConnectedClient {
     userId: number;
     email: string;
     username: string;
     socket: WebSocket;
 }
-interface IncomingMessage1 {
+interface IncomingTexts {
     type: 'message';
     to: number;
     content: string;
 }
-
+// Global runtime Map to track active connections in RAM (O(1) lookups)
 const clients = new Map<number, ConnectedClient>();
 
 export function initWebSocketServer(server:Server){
@@ -23,7 +24,7 @@ export function initWebSocketServer(server:Server){
 
     wss.on('connection', async(socket: WebSocket, req: IncomingMessage) => {
         console.log("CONNECTED");
-        const url = new URL(req.url!, 'http://${req.headers.host}');
+        const url = new URL(req.url || '', `http://${req.headers.host}`); 
         const token = url.searchParams.get('token');
 
         if(!token){
@@ -45,7 +46,7 @@ export function initWebSocketServer(server:Server){
         const {userId, email, username} = decoded;
 
         clients.set(userId, {userId, email, username, socket});
-        // console.log(`User ${email} connected. Online: ${clients.size}`);
+        console.log(`User ${email} connected. Online: ${clients.size}`);
 
         socket.send(JSON.stringify({
             type: 'connected',
@@ -73,26 +74,28 @@ export function initWebSocketServer(server:Server){
 
         socket.on('message', async(data) =>{
         try{
-            const parsed: IncomingMessage1 = JSON.parse(data.toString());
+            const parsed: IncomingTexts = JSON.parse(data.toString());
             
             if(parsed.type === 'message'){
                 await handleMessage(userId, parsed);
             }
         }catch(err){
-            // console.error('Message handler error:', err); 
+            console.error('Message handler error:', err); 
             socket.send(JSON.stringify({type:'error', message:'Invalid message format'}))
         }
         });
 
         socket.on('close', () => {
-            clients.delete(userId);
-            console.log(`User ${email} disconnected. Online: ${clients.size}`);
+            if(clients.get(userId)?.socket === socket){
+                clients.delete(userId);
+                console.log(`User ${email} disconnected. Online: ${clients.size}`);
+            }
         });
-        //  console.log('WebSocket server initialized');
+         console.log('WebSocket server initialized');
     });
 }
 
-async function handleMessage(senderId: number, msg: IncomingMessage1){
+async function handleMessage(senderId: number, msg: IncomingTexts){
     const sender = clients.get(senderId);
     const recipient = clients.get(msg.to);
 

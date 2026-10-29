@@ -1,11 +1,19 @@
+// API endpoints -Reg, Login, Refresh Token and Logout
+
 import express, { type Request, type Response } from 'express';
 import bcrypt from "bcrypt";
 import pool from '../db';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import crypto from 'crypto';
 
-
 const router = express.Router();
+
+
+/**
+ * @route   POST /api/auth/register
+ * @desc    Registers a new application user and checks for profile conflicts
+ * @access  Public
+*/
 
 router.post('/register', async(req: Request, res: Response) =>{
   const{email, password, username} = req.body;
@@ -35,6 +43,7 @@ router.post('/register', async(req: Request, res: Response) =>{
       })
 
   }catch (error: any){
+    // Postgres error code '23505' indicates a UNIQUE constraint violation
     if(error.code === '23505'){
       return res.status(409).json({message:"Duplicate or Empty Email/username"})
     }
@@ -42,6 +51,13 @@ router.post('/register', async(req: Request, res: Response) =>{
     return res.status(500).json({message: "Internal Server Error"});
   }
 });
+
+/**
+ * @route   POST /api/auth/login
+ * @desc    Authenticates credentials and establishes an HTTP-only cookie session
+ * @access  Public
+ */
+
 router.post('/login',async(req: Request, res: Response) =>{
   const {email, password} = req.body;
   try {
@@ -108,8 +124,13 @@ router.post('/login',async(req: Request, res: Response) =>{
   }
 });
 
+/**
+ * @route   POST /api/auth/refresh
+ * @desc    Issues a new access token using a valid, unrevoked cookie refresh token
+ * @access  Public (Requires Refresh Token Cookie)
+ */
+
 router.post('/refresh', async(req: Request, res:Response) =>{
-  // write refresh endpoint
   const refreshToken = req.cookies.refreshToken;
   const refreshTokenSecret= process.env.JWT_REFRESH_SECRET;
   
@@ -119,8 +140,6 @@ router.post('/refresh', async(req: Request, res:Response) =>{
   if (!refreshTokenSecret){
     return res.status(500).json({error: "Refresh Token secret is not configured"})
   }
-
-  // JWT refresh token verify
   try {
     const decoded = jwt.verify(refreshToken, refreshTokenSecret);
     if(typeof decoded === "string" || typeof decoded.userId !== "number" || decoded.userId <= 0)
@@ -161,6 +180,11 @@ router.post('/refresh', async(req: Request, res:Response) =>{
   }
 })
 
+/**
+ * @route   POST /api/auth/logout
+ * @desc    Revokes the current refresh token record in the DB and clears cookies
+ * @access  Public
+ */
 router.post('/logout', async(req: Request, res: Response) => {
   const refreshToken = req.cookies.refreshToken;
   if(!refreshToken){
@@ -173,18 +197,19 @@ router.post('/logout', async(req: Request, res: Response) => {
       WHERE token_hash = $1
       AND revoked_at IS NULL`,
       [tokenHashed]);
-
-  } catch (error) {
-    console.error('Logout failed:', error);
-    return res.status(500).json({error: 'Internal Server Error'})    
-  }
-  res.clearCookie('refreshToken',{
+    
+    res.clearCookie('refreshToken',{
     httpOnly: true,
     secure: process.env.NODE_ENV ==='production',
     sameSite: 'strict',
   });
 
   return res.status(200).json({message: 'Logged out successfully'});
+
+} catch (error) {
+    console.error('Logout failed:', error);
+    return res.status(500).json({error: 'Internal Server Error'})    
+  }
 })
 
 export default router;
