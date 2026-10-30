@@ -19,9 +19,8 @@ interface IncomingTexts {
 // Global runtime Map to track active connections in RAM (O(1) lookups)
 const clients = new Map<number, ConnectedClient>();
 
-export function initWebSocketServer(server:Server){
+export function initWebSocketServer(server:Server){    
     const wss = new WebSocketServer({server});
-
     wss.on('connection', async(socket: WebSocket, req: IncomingMessage) => {
         console.log("CONNECTED");
         const url = new URL(req.url || '', `http://${req.headers.host}`); 
@@ -33,6 +32,7 @@ export function initWebSocketServer(server:Server){
         }
 
         let decoded: {userId: number; email: string; username: string};
+
         try {
             decoded = jwt.verify(
                 token,

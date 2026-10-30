@@ -65,7 +65,7 @@ router.post('/login',async(req: Request, res: Response) =>{
       return res.status(400).json({error:"Email and Passwords are required"});
     }
     
-    const query = await pool.query(`SELECT id, email, password_hashed FROM users WHERE email = $1`,[email]);
+    const query = await pool.query(`SELECT id, email, password_hashed, username FROM users WHERE email = $1`,[email]);
     const user = query.rows[0];
     if(!user){
       return res.status(401).json({error: "Invalid email or password"})
@@ -80,6 +80,7 @@ router.post('/login',async(req: Request, res: Response) =>{
     const payload ={
       userId: user.id,
       email: user.email,
+      username: user.username
     }
     const secret_key= process.env.JWT_SECRET;
     const refreshTokenSecret= process.env.JWT_REFRESH_SECRET;
@@ -97,9 +98,12 @@ router.post('/login',async(req: Request, res: Response) =>{
     });
 
     const tokenHashed = crypto.createHash('sha256').update(refreshToken).digest('hex');
+
     const refreshTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);  
     // Save hashed token to DB
-    const result = await pool.query(`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, [user.id, tokenHashed, refreshTokenExpiresAt]);
+    const result = await pool.query(`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, 
+      [user.id, tokenHashed, refreshTokenExpiresAt]);
+   
     console.log('Refresh token row inserted:', result.rowCount);
 
     res.cookie('refreshToken',refreshToken,{
@@ -108,7 +112,6 @@ router.post('/login',async(req: Request, res: Response) =>{
       sameSite:'strict',
       maxAge: 7*24*60*60*1000,
     })
-
     return res.status(200).json({
       message:"Login Successful",
       accessToken: token,
@@ -142,6 +145,7 @@ router.post('/refresh', async(req: Request, res:Response) =>{
   }
   try {
     const decoded = jwt.verify(refreshToken, refreshTokenSecret);
+
     if(typeof decoded === "string" || typeof decoded.userId !== "number" || decoded.userId <= 0)
     {
       return res.status(401).json({error: "Invalid refresh token payload"});
@@ -153,18 +157,28 @@ router.post('/refresh', async(req: Request, res:Response) =>{
     }
     const tokenHashed = crypto.createHash('sha256').update(refreshToken).digest('hex');
   // Check for refreshtoken in db
-    const result = await pool.query
-    (`SELECT id, user_id FROM refresh_tokens 
-      WHERE token_hash = $1 
-      AND revoked_at IS NULL 
-      AND expires_at > NOW()`, 
-      [tokenHashed]);
-  
-    if(result.rows.length ===0){
-    return res.status(401).json({error: 'Refresh Token is invalid,expired, or revoked'});
-    }
 
-    const payLoad = {userId: decoded.userId}
+    const result =await pool.query(`
+      SELECT u.id, u.email, u.username
+      FROM users u
+      JOIN refresh_tokens rt ON rt.user_id = u.id
+      WHERE rt.token_hash = $1
+      AND rt.revoked_at is NULL
+      AND rt.expires_at > NOW()`,
+      [tokenHashed]);
+    const user = result.rows[0];
+
+    const payLoad = {
+      userId: user.id,
+      email: user.email,
+      username: user.username
+    }
+    // Compare database user ID with decoded.userId.
+  
+    if(result.rows.length ===0 || result.rows[0].id !== decoded.userId){
+    return res.status(401).json({error: 'Refresh Token is invalid,expired, or revoked'});
+    } 
+
     const newAccessToken = jwt.sign(payLoad, jwtSecret,{
       expiresIn: '15m'
     })
