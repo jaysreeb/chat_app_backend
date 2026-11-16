@@ -5,94 +5,61 @@ import jwt from 'jsonwebtoken';
 import { markDelivered, saveMessage, getUndeliveredMessages} from './messageService';
 
 // --- TYPE DEFINITIONS ---
-interface ConnectedClient {
+interface UserPayload{
     userId: number;
     email: string;
     username: string;
-    socket: WebSocket;
 }
+
+interface ConnectedClient extends UserPayload {
+    socket: WebSocket;
+    isAllive: boolean;  //Used for Ping/Pong heartbeat
+}
+
 interface IncomingTexts {
     type: 'message';
     to: number;
     content: string;
 }
+
+// Extend IncomingMessage to attach verified user during upgrade
+interface AuthenticatedRequest extends IncomingMessage{
+    user?: UserPayload;
+}
+
 // Global runtime Map to track active connections in RAM (O(1) lookups)
 const clients = new Map<number, ConnectedClient>();
 
 export function initWebSocketServer(server:Server){    
-    const wss = new WebSocketServer({server});
-    wss.on('connection', async(socket: WebSocket, req: IncomingMessage) => {
-        console.log("CONNECTED");
+    const wss = new WebSocketServer({noServer: true }); 
+    //Using noServer: true to authenticate BEFORE opening the socket
+    server.on('upgrade', (req: AuthenticatedRequest, socket, head) => {
+
         const url = new URL(req.url || '', `http://${req.headers.host}`); 
         const token = url.searchParams.get('token');
+        const secret = process.env.JWT_SECRET;
 
-        if(!token){
-            socket.close(1000, 'No token provided');
+        if(!token || !secret){
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
             return;
         }
-
-        let decoded: {userId: number; email: string; username: string};
-
         try {
-            decoded = jwt.verify(
-                token,
-                process.env.JWT_SECRET as string
-            ) as {userId: number; email: string; username: string};            
+            const decoded = jwt.verify(token, secret) as UserPayload;
+            if(!decoded || typeof decoded.userId !== 'number' || typeof decoded.email !== 'string' || typeof decoded.username !== 'string'){
+                throw new Error(' Invalid payload');
+            }
+            req.user = decoded;
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                wss.emit('Connection', ws, req);
+            });        
         } catch (err) {
-            socket.close(1000, 'Invalid token');
+            socket.write('HTTP/1.1 401 unauthorized\r\n\r\n');
+            socket.destroy();
             return;            
         }
-
-        const {userId, email, username} = decoded;
-
-        clients.set(userId, {userId, email, username, socket});
-        console.log(`User ${email} connected. Online: ${clients.size}`);
-
-        socket.send(JSON.stringify({
-            type: 'connected',
-            message: 'Connected Successfully',
-        }))
-
-        const undelivered = await getUndeliveredMessages(userId);
-        
-        if(undelivered.length > 0){
-            for (const msg of undelivered){
-                socket.send(JSON.stringify({
-                    type: 'message',
-                    id: msg.id,
-                    from: msg.sender_id,
-                    content: msg.content,
-                    timestamp: msg.created_at,
-                }));
-                await markDelivered(msg.id);
-            }
-            socket.send(JSON.stringify({
-                type: 'info',
-                message:`${undelivered.length} Undelivered messages are delivered now.`
-            }));
-        }
-
-        socket.on('message', async(data) =>{
-        try{
-            const parsed: IncomingTexts = JSON.parse(data.toString());
-            
-            if(parsed.type === 'message'){
-                await handleMessage(userId, parsed);
-            }
-        }catch(err){
-            console.error('Message handler error:', err); 
-            socket.send(JSON.stringify({type:'error', message:'Invalid message format'}))
-        }
-        });
-
-        socket.on('close', () => {
-            if(clients.get(userId)?.socket === socket){
-                clients.delete(userId);
-                console.log(`User ${email} disconnected. Online: ${clients.size}`);
-            }
-        });
-         console.log('WebSocket server initialized');
     });
+    //Heartbeat interval to clean up dead/ghost connections every 30s
 }
 
 async function handleMessage(senderId: number, msg: IncomingTexts){
@@ -126,4 +93,3 @@ async function handleMessage(senderId: number, msg: IncomingTexts){
         }))        
     } 
 }
-
