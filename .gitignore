@@ -7,3 +7,7 @@ QUESTIONS_ANS.md
 SQL.md
 # Vitest reports and artifacts
 .vitest/
+auth1.ts
+tests/manual/cookies.txt
+roadmap.md
+cookies.txt

@@ -149,7 +149,7 @@ router.post('/refresh', async(req: Request, res:Response) =>{
     return res.status(401).json({error: "Refresh Token is expired or altered"});
   }
 
-  const oldTokenHash = crypto.createHash('sha25').update(oldrefreshToken);
+  const oldTokenHash = crypto.createHash('sha256').update(oldrefreshToken).digest('hex');
   const client = await pool.connect();
   try {
 
@@ -185,7 +185,7 @@ router.post('/refresh', async(req: Request, res:Response) =>{
     const newRefresheToken = jwt.sign(payLoad, refreshTokenSecret, {expiresIn:'7d'});
     const newAccessToken = jwt.sign(payLoad, jwtSecret, {expiresIn: '15m'});
 
-    const newTokenHash = crypto.createHash('sha256').update(newRefresheToken);
+    const newTokenHash = crypto.createHash('sha256').update(newRefresheToken).digest('hex');
     const newExpiresAt = new Date(Date.now()+7*24*60*60*1000);
 
     await client.query(`

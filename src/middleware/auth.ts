@@ -13,16 +13,18 @@ export const authenticateToken = (
 	res: Response,
 	next: NextFunction
 ) => {
-	const authHeader = req.headers ['authorization'];
-	const token = authHeader && authHeader.split(' ')[1];
+	const authHeader = req.headers.authorization;
+	const token = authHeader?.split(' ')[1];
   	if(!token){
-		return res.status(401).json({error: 'No token Provided'});
+		return res.status(401).json({error: 'No access token Provided'});
 	}
+	const jwtSecret = process.env.JWT_SECRET;
+	if(!jwtSecret){
+		return res.status(500).json({error: "Env variables arent configured!"})
+	}
+
 	try{
-		const decoded = jwt.verify(
-			token,
-			process.env.JWT_SECRET as string
-		) as {userId: number; email: string; username: string};
+		const decoded = jwt.verify(token, jwtSecret) as {userId: number; email: string; username: string};
 		req.userId = decoded.userId;
 		req.email = decoded.email;
 		req.username = decoded.username;
