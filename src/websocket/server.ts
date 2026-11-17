@@ -13,7 +13,7 @@ interface UserPayload{
 
 interface ConnectedClient extends UserPayload {
     socket: WebSocket;
-    isAllive: boolean;  //Used for Ping/Pong heartbeat
+    isAlive: boolean;  //Used for Ping/Pong heartbeat
 }
 
 interface IncomingTexts {
@@ -60,6 +60,16 @@ export function initWebSocketServer(server:Server){
         }
     });
     //Heartbeat interval to clean up dead/ghost connections every 30s
+    const heartbeatInterval = setInterval(() => {
+        wss.clients.forEach(ws) => {
+            if(!wss.isAlive)
+        }
+    }, 30000);
+
+    //Safely deliver offline messages
+    //Strict runtime validation
+    
+
 }
 
 async function handleMessage(senderId: number, msg: IncomingTexts){
