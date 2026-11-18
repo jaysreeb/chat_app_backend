@@ -2,13 +2,13 @@ import pool from "../db";
 
 export async function saveMessage(
     senderId:number,
-    receivedId : number,
+    receiverId : number,
     content : string
 ):Promise<number>{
     const result = await pool.query(
-        `INSERT INTO messages (sender_id, receiver_id, content, delivered) 
+        `INSERT INTO messages (sender_id, receiver_id, chat_content, delivered) 
         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [senderId, receivedId, content, false]
+        [senderId, receiverId, content, false]
     );
     return result.rows[0].id;    
 }
@@ -22,7 +22,7 @@ export async function markDelivered(messageId:number): Promise<void>{
 
 export async function getUndeliveredMessages(userId:number) {
     const result = await pool.query(
-        `SELECT m.id, m.sender_id, m.content, m.created_at, u.username as from_username
+        `SELECT m.id, m.sender_id, m.chat_content, m.created_at, u.username as from_username
         FROM messages m
         JOIN users u ON u.id = m.sender_id
         WHERE m.receiver_id = $1 AND m.delivered = false
